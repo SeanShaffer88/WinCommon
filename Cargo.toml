@@ -1,0 +1,19 @@
+[package]
+name = "win-common"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+authors = ["Sean Shaffer"]
+description = "Shared building blocks for Sean's Windows DLL collection: FFI last-error/C-string plumbing, hand-rolled JSON writing, civil calendar math, and UTF-16 wide-string helpers"
+license = "MIT"
+keywords = ["windows", "ffi"]
+categories = ["os::windows-apis", "api-bindings"]
+
+[lib]
+name = "win_common"
+crate-type = ["rlib"]
+
+# Zero dependencies by design (the collection's house rule): everything
+# here is std-only, so adopting win-common adds nothing to a DLL's
+# dependency tree beyond this crate itself.
+[dependencies]
