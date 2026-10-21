@@ -89,11 +89,10 @@ pub fn into_raw_c_string(s: String) -> *mut c_char {
 
 /// Release a string produced by [`into_raw_c_string`]. Null is a no-op.
 ///
-/// # Caller contract
+/// # Safety
 /// `p` must be null or a pointer returned by [`into_raw_c_string`] that
 /// has not been freed yet — the standard C ownership rule.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn free_c_string(p: *mut c_char) {
+pub unsafe fn free_c_string(p: *mut c_char) {
     if !p.is_null() {
         // SAFETY: caller contract above.
         unsafe {
@@ -109,29 +108,41 @@ pub fn free_c_string(p: *mut c_char) {
 /// bytes — the messages FastSearch/ArchiveKit's `require_str` and
 /// VaultKit/CrashKit's `input` agree on.
 ///
-/// # Caller contract
-/// `p` must be a valid NUL-terminated UTF-8 string or null.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn require_str(p: *const c_char, what: &str) -> Result<String, Error> {
+/// # Safety
+/// `p` must be null or point to a readable NUL-terminated byte sequence
+/// for the duration of the call. Invalid UTF-8 is allowed and yields an error.
+pub unsafe fn require_str(p: *const c_char, what: &str) -> Result<String, Error> {
     if p.is_null() {
         return crate::error::err(INVALID_ARG, format!("{what} must not be null"));
     }
     // SAFETY: caller contract above.
     let s = unsafe { CStr::from_ptr(p) };
-    s.to_str()
-        .map(|v| v.to_string())
+    require_c_str(Some(s), what)
+}
+
+/// Safe Rust entry point when the caller already owns a borrowed C string.
+pub fn require_c_str(value: Option<&CStr>, what: &str) -> Result<String, Error> {
+    let value = value.ok_or_else(|| (INVALID_ARG, format!("{what} must not be null")))?;
+    value
+        .to_str()
+        .map(str::to_owned)
         .map_err(|_| (INVALID_ARG, format!("{what} is not valid UTF-8")))
+}
+
+/// Safe optional input decoding, tied to the input reference's lifetime.
+pub fn optional_c_str(value: Option<&CStr>) -> Option<&str> {
+    value.and_then(|s| s.to_str().ok())
 }
 
 /// Decode an optional UTF-8 input argument: null → `None`, invalid
 /// UTF-8 → `None`. Extracted from WinRecovery's `opt_c_str`, the only
 /// DLL that takes nullable string inputs today.
 ///
-/// # Caller contract
-/// `p` must be a valid NUL-terminated UTF-8 string or null. The returned
-/// reference borrows from the caller's buffer.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn opt_c_str<'a>(p: *const c_char) -> Option<&'a str> {
+/// # Safety
+/// `p` must be null or point to a readable NUL-terminated byte sequence.
+/// Non-null data must stay alive and immutable for the returned lifetime
+/// `'a`. Invalid UTF-8 is allowed and yields None.
+pub unsafe fn opt_c_str<'a>(p: *const c_char) -> Option<&'a str> {
     if p.is_null() {
         None
     } else {
@@ -201,8 +212,12 @@ mod tests {
         // SAFETY: p came from into_raw_c_string just above.
         let s = unsafe { CStr::from_ptr(p) }.to_str().unwrap().to_string();
         assert_eq!(s, "hello");
-        free_c_string(p);
-        free_c_string(std::ptr::null_mut()); // no-op, no crash
+        unsafe {
+            free_c_string(p);
+        }
+        unsafe {
+            free_c_string(std::ptr::null_mut());
+        } // no-op, no crash
     }
 
     #[test]
@@ -216,25 +231,28 @@ mod tests {
     #[test]
     fn require_str_contract() {
         assert_eq!(
-            require_str(std::ptr::null(), "path").unwrap_err(),
+            unsafe { require_str(std::ptr::null(), "path") }.unwrap_err(),
             (INVALID_ARG, "path must not be null".to_string())
         );
         let bad = CString::new(vec![0xFFu8]).unwrap();
         assert_eq!(
-            require_str(bad.as_ptr(), "path").unwrap_err(),
+            unsafe { require_str(bad.as_ptr(), "path") }.unwrap_err(),
             (INVALID_ARG, "path is not valid UTF-8".to_string())
         );
         let good = cstr("fine");
-        assert_eq!(require_str(good.as_ptr(), "path").unwrap(), "fine");
+        assert_eq!(
+            unsafe { require_str(good.as_ptr(), "path") }.unwrap(),
+            "fine"
+        );
     }
 
     #[test]
     fn opt_c_str_contract() {
-        assert_eq!(opt_c_str(std::ptr::null()), None);
+        assert_eq!(unsafe { opt_c_str(std::ptr::null()) }, None);
         let good = cstr("x");
-        assert_eq!(opt_c_str(good.as_ptr()), Some("x"));
+        assert_eq!(unsafe { opt_c_str(good.as_ptr()) }, Some("x"));
         let bad = CString::new(vec![0xFFu8]).unwrap();
-        assert_eq!(opt_c_str(bad.as_ptr()), None);
+        assert_eq!(unsafe { opt_c_str(bad.as_ptr()) }, None);
     }
 
     #[test]
@@ -255,5 +273,34 @@ mod tests {
     fn guard_value_passes_result_through() {
         assert_eq!(guard_value(|| 3).unwrap(), 3);
         assert!(guard_value(|| -> i32 { panic!("boom") }).is_err());
+    }
+}
+
+#[cfg(test)]
+mod safety_tests {
+    use super::*;
+    #[test]
+    fn borrowed_c_strings_decode_without_raw_pointers() {
+        let good = CString::new("café").unwrap();
+        assert_eq!(require_c_str(Some(&good), "input").unwrap(), "café");
+        assert_eq!(optional_c_str(Some(&good)), Some("café"));
+        assert_eq!(require_c_str(None, "input").unwrap_err().0, INVALID_ARG);
+        let bad = CString::new(vec![255]).unwrap();
+        assert!(require_c_str(Some(&bad), "input").is_err());
+        assert!(optional_c_str(Some(&bad)).is_none());
+    }
+    #[test]
+    fn last_errors_are_isolated_between_threads() {
+        set_error(17, "parent");
+        std::thread::spawn(|| {
+            clear_error();
+            assert_eq!(last_error_code(), 0);
+            set_error(42, "child");
+        })
+        .join()
+        .unwrap();
+        assert_eq!(last_error_code(), 17);
+        assert_eq!(last_error_message(), "parent");
+        clear_error();
     }
 }

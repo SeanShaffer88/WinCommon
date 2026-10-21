@@ -71,10 +71,16 @@ pub fn array(items: &[String]) -> String {
 /// order, keys and string values are escaped, and no trailing comma is
 /// ever produced. [`JsonObject::raw`] covers the pre-rendered values
 /// CrashKit hand-formats (hex strings, `null`, nested objects).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct JsonObject {
     buf: String,
     first: bool,
+}
+
+impl Default for JsonObject {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl JsonObject {
@@ -185,5 +191,9 @@ mod tests {
             "{\"name\":\"a\\\"b\",\"count\":3,\"delta\":-2,\"ok\":true,\"maybe\":null}"
         );
         assert_eq!(JsonObject::new().finish(), "{}");
+        assert_eq!(JsonObject::default().finish(), "{}");
+        let mut default = JsonObject::default();
+        default.str("key", "value");
+        assert_eq!(default.finish(), "{\"key\":\"value\"}");
     }
 }

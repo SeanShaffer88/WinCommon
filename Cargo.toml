@@ -6,6 +6,7 @@ rust-version = "1.80"
 authors = ["Sean Shaffer"]
 description = "Shared building blocks for Sean's Windows DLL collection: FFI last-error/C-string plumbing, hand-rolled JSON writing, civil calendar math, and UTF-16 wide-string helpers"
 license = "MIT"
+repository = "https://github.com/SeanShaffer88/WinCommon"
 keywords = ["windows", "ffi"]
 categories = ["os::windows-apis", "api-bindings"]
 

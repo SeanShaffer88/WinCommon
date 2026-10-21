@@ -12,7 +12,7 @@ extracted once, from the copies the DLLs actually carry. It is a plain
 Rust library crate (no C ABI of its own), is itself zero-dependency,
 and is MIT-licensed.
 
-**Status:** built and gated locally; not yet published, and none of
+**Status:** shared core hardened locally; not yet published, and none of
 the six DLLs consume it yet. Adoption is a separate, per-DLL step (see
 the notes below) — each DLL's public C ABI stays exactly as it is.
 
@@ -156,3 +156,27 @@ tests are the same unit tests the donor projects run.
 ## License
 
 MIT — Copyright (c) 2026 Sean Shaffer. See [LICENSE](LICENSE).
+
+## Adoption safety update — October 21, 2026
+
+- `JsonObject::default()` now behaves like `new()`; it previously emitted
+  invalid JSON (even an empty default finished as `}`). Field order and
+  the explicitly constructed builder retain their existing behavior.
+- `free_c_string`, `require_str`, and `opt_c_str` are now **unsafe Rust
+  functions**. Their raw-pointer validity and lifetime requirements are
+  explicit. This is a Rust source-compatibility change before adoption;
+  no existing C exports or donor DLLs are changed.
+- Prefer safe `require_c_str(Option<&CStr>, what)` and
+  `optional_c_str(Option<&CStr>)` inside Rust code. Raw C exports wrap the
+  unsafe operation with a narrowly scoped, documented unsafe block.
+- `wide::try_to_wide_z` rejects embedded NULs before a Win32 API can
+  truncate user input. Existing `to_wide_z` intentionally retains donor
+  semantics; migrate boundary validation deliberately.
+- Panic guards require the **consuming application's** release profile to
+  permit unwinding. A dependency cannot override `panic = "abort"` in its
+  host. Guards cannot recover invalid pointers or allocation failure.
+
+Use `cargo test --locked`, `cargo test --release --locked`, and WinDevKit's
+full gate before adopting. Thread-local error isolation and safe borrowed
+C-string conversion have regression coverage. The crate remains pure Rust,
+std-only, with no Win32 imports and no C ABI of its own.
