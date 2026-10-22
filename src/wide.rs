@@ -18,6 +18,19 @@ pub fn to_wide_z(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Encode a single Win32 string, rejecting interior NULs instead of
+/// silently letting a W API truncate a path or registry value name.
+/// Existing to_wide_z preserves donor behavior; use this at input boundaries.
+pub fn try_to_wide_z(s: &str) -> crate::error::Result<Vec<u16>> {
+    if s.contains('\0') {
+        return crate::error::err(
+            crate::error::INVALID_ARG,
+            "wide string contains an interior NUL",
+        );
+    }
+    Ok(to_wide_z(s))
+}
+
 /// Decode a wide buffer to a `String`, stopping at the first NUL.
 /// Invalid units are replaced with U+FFFD (lossy).
 pub fn from_wide_z(buf: &[u16]) -> String {
@@ -61,5 +74,21 @@ mod tests {
     fn roundtrip() {
         let s = "VaultKit/<ns>/<key> — café ☃";
         assert_eq!(from_wide_z(&to_wide_z(s)), s);
+    }
+}
+
+#[cfg(test)]
+mod checked_tests {
+    use super::*;
+    #[test]
+    fn checked_encoding_prevents_win32_truncation() {
+        assert_eq!(
+            try_to_wide_z("a\0b").unwrap_err().0,
+            crate::error::INVALID_ARG
+        );
+        for text in ["", "café", "文😀"] {
+            assert_eq!(try_to_wide_z(text).unwrap(), to_wide_z(text));
+        }
+        assert_eq!(to_wide_z("a\0b"), vec![97, 0, 98, 0]);
     }
 }
